@@ -25,6 +25,9 @@ public class P2PNetworkService {
     @Autowired
     private SteamService steamService;
     
+    @Autowired
+    private P2PNetworkUtils networkUtils;
+    
     // 连接状态监听器
     private final List<ConnectionStateListener> connectionListeners = new CopyOnWriteArrayList<>();
     
@@ -33,6 +36,12 @@ public class P2PNetworkService {
     
     // 当前连接
     private final Map<SteamID, SteamNetworking.P2PSessionState> connections = new ConcurrentHashMap<>();
+    
+    // 连接尝试跟踪 - 用于超时检测
+    private final Map<SteamID, Long> connectionAttempts = new ConcurrentHashMap<>();
+    
+    // 连接超时时间（毫秒）
+    private static final long CONNECTION_TIMEOUT = 30000; // 30秒
     
     // 是否正在监听
     private boolean isListening = false;
@@ -71,6 +80,9 @@ public class P2PNetworkService {
             // 启动数据包处理线程
             startPacketProcessor();
             
+            // 启动网络监控
+            networkUtils.startNetworkMonitoring();
+            
             return true;
             
         } catch (Exception e) {
@@ -87,6 +99,9 @@ public class P2PNetworkService {
             isListening = false;
             logger.info("🛑 P2P监听已停止");
             
+            // 停止网络监控
+            networkUtils.stopNetworkMonitoring();
+            
             // 关闭所有现有连接
             for (SteamID steamID : connections.keySet()) {
                 disconnectFromUser(steamID.toString());
@@ -97,48 +112,61 @@ public class P2PNetworkService {
     
     /**
      * 连接到指定的Steam用户
+     * 模仿C++示例的InitiateServerConnection逻辑
      */
     public boolean connectToUser(String steamIDString) {
-        logger.info("🔍 [P2P诊断] 开始连接用户: {}", steamIDString);
+        logger.info("🔍 [P2P连接] 开始连接用户: {}", steamIDString);
         
         if (!steamService.isInitialized()) {
-            logger.error("❌ [P2P诊断] Steam API未初始化，无法连接");
+            logger.error("❌ [P2P连接] Steam API未初始化，无法连接");
             return false;
         }
         
         try {
             SteamID steamID = SteamID.createFromNativeHandle(Long.parseLong(steamIDString));
-            logger.info("🔗 [P2P诊断] 正在连接到用户: {} ({})", steamIDString, steamID);
-            logger.info("🔍 [P2P诊断] 当前Steam用户: {}", steamService.getCurrentUserName());
+            logger.info("🔗 [P2P连接] 正在连接到用户: {} ({})", steamIDString, steamID);
+            logger.info("🔍 [P2P连接] 当前Steam用户: {}", steamService.getCurrentUserName());
+            
+            // 检查是否已经连接
+            if (connections.containsKey(steamID)) {
+                logger.warn("⚠️ [P2P连接] 与用户 {} 的连接已存在", steamIDString);
+                return true;
+            }
             
             // 使用Steam P2P API发送连接请求
             SteamNetworking steamNetworking = steamService.getNetworking();
             if (steamNetworking != null) {
-                logger.info("🔍 [P2P诊断] Steam Networking接口可用");
+                logger.info("🔍 [P2P连接] Steam Networking接口可用");
                 
-                // 发送P2P连接请求
-                ByteBuffer messageBuffer = ByteBuffer.allocateDirect("CONNECT_REQUEST".getBytes().length);
-                messageBuffer.put("CONNECT_REQUEST".getBytes());
+                // 发送P2P连接请求 - 模仿C++示例的BSendServerData
+                String connectMessage = "P2P_CONNECT_REQUEST";
+                ByteBuffer messageBuffer = ByteBuffer.allocateDirect(connectMessage.getBytes().length);
+                messageBuffer.put(connectMessage.getBytes());
                 messageBuffer.flip();
                 
-                logger.info("🔍 [P2P诊断] 准备发送P2P数据包到: {}, 数据大小: {}", steamIDString, messageBuffer.remaining());
+                logger.info("🔍 [P2P连接] 准备发送P2P数据包到: {}, 数据大小: {}", steamIDString, messageBuffer.remaining());
                 
+                // 使用可靠传输发送连接请求
                 boolean result = steamNetworking.sendP2PPacket(steamID, 
                     messageBuffer, 
                     SteamNetworking.P2PSend.Reliable, 
                     0);
                 
                 if (result) {
-                    logger.info("✅ [P2P诊断] 连接请求已发送给用户: {}", steamIDString);
-                    logger.info("🔍 [P2P诊断] 请检查目标用户是否：1) 运行了此应用 2) 正在监听P2P连接 3) Steam在线");
+                    logger.info("✅ [P2P连接] 连接请求已发送给用户: {}", steamIDString);
+                    logger.info("🔍 [P2P连接] 等待对方接受连接...");
+                    
+                    // 记录连接尝试时间，用于超时检测
+                    connectionAttempts.put(steamID, System.currentTimeMillis());
+                    
                     return true;
                 } else {
-                    logger.error("❌ [P2P诊断] 发送连接请求失败 - Steam API返回false");
-                    logger.error("🔍 [P2P诊断] 可能原因：1) 目标用户不在线 2) 网络问题 3) Steam P2P服务问题");
+                    logger.error("❌ [P2P连接] 发送连接请求失败 - Steam API返回false");
+                    logger.error("🔍 [P2P连接] 可能原因：1) 目标用户不在线 2) 网络问题 3) Steam P2P服务问题");
                     return false;
                 }
             } else {
-                logger.error("❌ [P2P诊断] Steam Networking接口不可用");
+                logger.error("❌ [P2P连接] Steam Networking接口不可用");
                 return false;
             }
             
@@ -153,18 +181,48 @@ public class P2PNetworkService {
     
     /**
      * 断开与指定用户的连接
+     * 模仿C++示例的DisconnectFromServer逻辑
      */
     public void disconnectFromUser(String steamIDString) {
         try {
             SteamID steamID = SteamID.createFromNativeHandle(Long.parseLong(steamIDString));
-            logger.info("🔌 正在断开与用户 {} 的连接", steamIDString);
+            logger.info("🔌 [P2P断开] 正在断开与用户 {} 的连接", steamIDString);
             
             // 使用Steam P2P API关闭连接
             SteamNetworking steamNetworking = steamService.getNetworking();
             if (steamNetworking != null) {
+                // 发送断开连接消息
+                String disconnectMessage = "P2P_DISCONNECT";
+                ByteBuffer messageBuffer = ByteBuffer.allocateDirect(disconnectMessage.getBytes().length);
+                messageBuffer.put(disconnectMessage.getBytes());
+                messageBuffer.flip();
+                
+                // 发送断开连接通知
+                steamNetworking.sendP2PPacket(steamID, 
+                    messageBuffer, 
+                    SteamNetworking.P2PSend.Reliable, 
+                    0);
+                
+                // 关闭P2P会话
                 steamNetworking.closeP2PSessionWithUser(steamID);
+                
+                // 从连接列表中移除
                 connections.remove(steamID);
-                logger.info("✅ 已断开与用户 {} 的连接", steamIDString);
+                connectionAttempts.remove(steamID);
+                
+                // 从活跃连接中移除
+                steamService.removeActiveConnection(steamID);
+                
+                logger.info("✅ [P2P断开] 已断开与用户 {} 的连接", steamIDString);
+                
+                // 通知连接状态监听器
+                for (ConnectionStateListener listener : connectionListeners) {
+                    try {
+                        listener.onConnectionLost(steamID);
+                    } catch (Exception e) {
+                        logger.error("💥 连接状态监听器处理错误", e);
+                    }
+                }
             }
             
         } catch (NumberFormatException e) {
@@ -176,6 +234,7 @@ public class P2PNetworkService {
     
     /**
      * 发送消息给指定用户
+     * 模仿C++示例的BSendServerData方法
      */
     public boolean sendMessage(String steamIDString, String message) {
         if (!steamService.isInitialized()) {
@@ -185,7 +244,16 @@ public class P2PNetworkService {
         
         try {
             SteamID steamID = SteamID.createFromNativeHandle(Long.parseLong(steamIDString));
-            logger.debug("📤 发送消息给用户 {}: {}", steamIDString, message);
+            logger.debug("📤 [P2P发送] 发送消息给用户 {}: {}", steamIDString, message);
+            
+            // 检查连接是否存在
+            if (!connections.containsKey(steamID) && !steamService.hasActiveConnection(steamID)) {
+                logger.warn("⚠️ [P2P发送] 与用户 {} 的连接不存在，尝试建立连接", steamIDString);
+                if (!connectToUser(steamIDString)) {
+                    logger.error("❌ [P2P发送] 无法建立与用户 {} 的连接", steamIDString);
+                    return false;
+                }
+            }
             
             // 使用Steam P2P API发送消息
             SteamNetworking steamNetworking = steamService.getNetworking();
@@ -193,25 +261,29 @@ public class P2PNetworkService {
                 // 将消息转换为字节数组
                 byte[] messageBytes = message.getBytes("UTF-8");
                 
-                // 发送P2P数据包
+                // 发送P2P数据包 - 模仿C++示例的发送逻辑
                 ByteBuffer messageBuffer = ByteBuffer.allocateDirect(messageBytes.length);
                 messageBuffer.put(messageBytes);
                 messageBuffer.flip();
                 
+                // 根据消息类型选择发送方式
+                SteamNetworking.P2PSend sendType = determineSendType(message);
+                
                 boolean result = steamNetworking.sendP2PPacket(steamID, 
                     messageBuffer, 
-                    SteamNetworking.P2PSend.Reliable, 
+                    sendType, 
                     0);
                 
                 if (result) {
-                    logger.info("✅ 消息已发送给用户 {}: {}", steamIDString, message);
+                    logger.info("✅ [P2P发送] 消息已发送给用户 {}: {}", steamIDString, message);
                     return true;
                 } else {
-                    logger.error("❌ 发送消息失败");
+                    logger.error("❌ [P2P发送] 发送消息失败 - Steam API返回false");
+                    logger.error("🔍 [P2P发送] 可能原因：1) 连接已断开 2) 网络问题 3) 消息过大");
                     return false;
                 }
             } else {
-                logger.error("❌ Steam Networking接口不可用");
+                logger.error("❌ [P2P发送] Steam Networking接口不可用");
                 return false;
             }
             
@@ -225,6 +297,20 @@ public class P2PNetworkService {
     }
     
     /**
+     * 根据消息类型确定发送方式
+     * 模仿C++示例的发送标志选择逻辑
+     */
+    private SteamNetworking.P2PSend determineSendType(String message) {
+        // 连接相关消息使用可靠传输
+        if (message.startsWith("P2P_CONNECT_") || message.startsWith("P2P_DISCONNECT")) {
+            return SteamNetworking.P2PSend.Reliable;
+        }
+        
+        // 普通消息使用可靠传输（确保消息送达）
+        return SteamNetworking.P2PSend.Reliable;
+    }
+    
+    /**
      * 监听P2P数据包处理事件
      */
     @EventListener
@@ -234,6 +320,7 @@ public class P2PNetworkService {
     
     /**
      * 处理接收到的P2P数据包
+     * 模仿C++示例的ReceiveNetworkData方法
      */
     private void processReceivedPackets() {
         if (!steamService.isInitialized()) {
@@ -264,25 +351,220 @@ public class P2PNetworkService {
                     
                     logger.debug("📥 收到来自用户 {} 的消息: {}", senderID, message);
                     
-                    // 通知消息监听器
-                    for (MessageListener listener : messageListeners) {
-                        try {
-                            listener.onMessageReceived(senderID, message);
-                        } catch (Exception e) {
-                            logger.error("💥 消息监听器处理错误", e);
-                        }
-                    }
+                    // 处理不同类型的消息 - 模仿C++示例的消息类型处理
+                    handleReceivedMessage(senderID, message);
                     
                     // 更新连接状态
                     connections.put(senderID, sessionState);
+                    
+                    // 清除连接尝试记录（连接成功）
+                    connectionAttempts.remove(senderID);
                 }
                 
                 // 检查是否还有更多数据包
                 packetSize = steamNetworking.isP2PPacketAvailable(0);
             }
             
+            // 检查连接超时
+            checkConnectionTimeouts();
+            
         } catch (Exception e) {
             logger.error("💥 处理接收数据包时发生错误", e);
+        }
+    }
+    
+    /**
+     * 处理接收到的消息
+     * 模仿C++示例的消息类型处理逻辑
+     */
+    private void handleReceivedMessage(SteamID senderID, String message) {
+        try {
+            // 处理连接请求
+            if ("P2P_CONNECT_REQUEST".equals(message)) {
+                logger.info("📨 [P2P接收] 收到来自 {} 的连接请求", senderID);
+                handleConnectionRequest(senderID);
+                return;
+            }
+            
+            // 处理连接确认
+            if ("P2P_CONNECT_ACCEPT".equals(message)) {
+                logger.info("✅ [P2P接收] 收到来自 {} 的连接确认", senderID);
+                handleConnectionAccept(senderID);
+                return;
+            }
+            
+            // 处理连接拒绝
+            if ("P2P_CONNECT_REJECT".equals(message)) {
+                logger.warn("❌ [P2P接收] 收到来自 {} 的连接拒绝", senderID);
+                handleConnectionReject(senderID);
+                return;
+            }
+            
+            // 处理断开连接消息
+            if ("P2P_DISCONNECT".equals(message)) {
+                logger.info("🔌 [P2P接收] 收到来自 {} 的断开连接消息", senderID);
+                handleDisconnectMessage(senderID);
+                return;
+            }
+            
+            // 处理ping消息
+            if (message.startsWith("P2P_PING:")) {
+                logger.debug("📡 [P2P接收] 收到来自 {} 的ping消息", senderID);
+                networkUtils.handlePingRequest(senderID, message);
+                return;
+            }
+            
+            // 处理pong消息
+            if (message.startsWith("P2P_PONG:")) {
+                logger.debug("📡 [P2P接收] 收到来自 {} 的pong消息", senderID);
+                networkUtils.handlePingResponse(senderID, message);
+                return;
+            }
+            
+            // 处理普通消息
+            logger.debug("📨 [P2P接收] 收到来自 {} 的普通消息: {}", senderID, message);
+            
+            // 通知消息监听器
+            for (MessageListener listener : messageListeners) {
+                try {
+                    listener.onMessageReceived(senderID, message);
+                } catch (Exception e) {
+                    logger.error("💥 消息监听器处理错误", e);
+                }
+            }
+            
+        } catch (Exception e) {
+            logger.error("💥 处理接收消息时发生错误", e);
+        }
+    }
+    
+    /**
+     * 处理连接请求
+     */
+    private void handleConnectionRequest(SteamID senderID) {
+        try {
+            logger.info("🔗 [P2P接收] 处理来自 {} 的连接请求", senderID);
+            
+            // 自动接受连接请求 - 模仿C++示例的自动接受逻辑
+            SteamNetworking steamNetworking = steamService.getNetworking();
+            if (steamNetworking != null) {
+                // 发送连接确认
+                String acceptMessage = "P2P_CONNECT_ACCEPT";
+                ByteBuffer messageBuffer = ByteBuffer.allocateDirect(acceptMessage.getBytes().length);
+                messageBuffer.put(acceptMessage.getBytes());
+                messageBuffer.flip();
+                
+                boolean result = steamNetworking.sendP2PPacket(senderID, 
+                    messageBuffer, 
+                    SteamNetworking.P2PSend.Reliable, 
+                    0);
+                
+                if (result) {
+                    logger.info("✅ [P2P接收] 已发送连接确认给 {}", senderID);
+                    // 添加到活跃连接
+                    steamService.addActiveConnection(senderID);
+                    
+                    // 通知连接状态监听器
+                    for (ConnectionStateListener listener : connectionListeners) {
+                        try {
+                            listener.onConnectionEstablished(senderID);
+                        } catch (Exception e) {
+                            logger.error("💥 连接状态监听器处理错误", e);
+                        }
+                    }
+                } else {
+                    logger.error("❌ [P2P接收] 发送连接确认失败");
+                }
+            }
+            
+        } catch (Exception e) {
+            logger.error("💥 处理连接请求时发生错误", e);
+        }
+    }
+    
+    /**
+     * 处理连接确认
+     */
+    private void handleConnectionAccept(SteamID senderID) {
+        logger.info("✅ [P2P连接] 连接已建立: {}", senderID);
+        
+        // 添加到活跃连接
+        steamService.addActiveConnection(senderID);
+        
+        // 通知连接状态监听器
+        for (ConnectionStateListener listener : connectionListeners) {
+            try {
+                listener.onConnectionEstablished(senderID);
+            } catch (Exception e) {
+                logger.error("💥 连接状态监听器处理错误", e);
+            }
+        }
+    }
+    
+    /**
+     * 处理连接拒绝
+     */
+    private void handleConnectionReject(SteamID senderID) {
+        logger.warn("❌ [P2P连接] 连接被拒绝: {}", senderID);
+        
+        // 通知连接状态监听器
+        for (ConnectionStateListener listener : connectionListeners) {
+            try {
+                listener.onConnectionFailed(senderID);
+            } catch (Exception e) {
+                logger.error("💥 连接状态监听器处理错误", e);
+            }
+        }
+    }
+    
+    /**
+     * 处理断开连接消息
+     */
+    private void handleDisconnectMessage(SteamID senderID) {
+        logger.info("🔌 [P2P接收] 处理来自 {} 的断开连接", senderID);
+        
+        // 从连接列表中移除
+        connections.remove(senderID);
+        connectionAttempts.remove(senderID);
+        
+        // 从活跃连接中移除
+        steamService.removeActiveConnection(senderID);
+        
+        // 通知连接状态监听器
+        for (ConnectionStateListener listener : connectionListeners) {
+            try {
+                listener.onConnectionLost(senderID);
+            } catch (Exception e) {
+                logger.error("💥 连接状态监听器处理错误", e);
+            }
+        }
+    }
+    
+    /**
+     * 检查连接超时
+     */
+    private void checkConnectionTimeouts() {
+        long currentTime = System.currentTimeMillis();
+        
+        for (Map.Entry<SteamID, Long> entry : connectionAttempts.entrySet()) {
+            SteamID steamID = entry.getKey();
+            long attemptTime = entry.getValue();
+            
+            if (currentTime - attemptTime > CONNECTION_TIMEOUT) {
+                logger.warn("⏰ [P2P连接] 连接超时: {}", steamID);
+                
+                // 移除超时的连接尝试
+                connectionAttempts.remove(steamID);
+                
+                // 通知连接状态监听器
+                for (ConnectionStateListener listener : connectionListeners) {
+                    try {
+                        listener.onConnectionFailed(steamID);
+                    } catch (Exception e) {
+                        logger.error("💥 连接状态监听器处理错误", e);
+                    }
+                }
+            }
         }
     }
     
@@ -334,5 +616,19 @@ public class P2PNetworkService {
      */
     public boolean isListening() {
         return isListening;
+    }
+    
+    /**
+     * 获取网络状态信息
+     */
+    public String getNetworkStatus() {
+        return networkUtils.getConnectionStats();
+    }
+    
+    /**
+     * 获取网络连接质量
+     */
+    public String getNetworkQuality() {
+        return networkUtils.getNetworkQuality();
     }
 }

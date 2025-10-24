@@ -49,8 +49,7 @@ public class SteamService {
     @Autowired
     private ApplicationEventPublisher eventPublisher;
     
-    @Autowired
-    @Lazy
+    // 移除循环依赖，直接创建回调实例
     private SteamNetworkingCallbackImpl steamNetworkingCallback;
     
     @PostConstruct
@@ -82,6 +81,10 @@ public class SteamService {
             logger.debug("🔌 初始化Steam接口...");
             steamUser = new SteamUser(new SteamUserCallbackImpl());
             steamFriends = new SteamFriends(new SteamFriendsCallbackImpl());
+            
+            // 创建回调实例并设置依赖
+            steamNetworkingCallback = new SteamNetworkingCallbackImpl();
+            steamNetworkingCallback.setSteamService(this);
             steamNetworking = new SteamNetworking(steamNetworkingCallback);
             
             // 启动回调处理线程
