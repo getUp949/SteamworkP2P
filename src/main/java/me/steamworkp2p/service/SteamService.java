@@ -15,6 +15,7 @@ import org.springframework.context.ApplicationEventPublisher;
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Lazy;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
@@ -41,6 +42,10 @@ public class SteamService {
     
     @Autowired
     private ApplicationEventPublisher eventPublisher;
+    
+    @Autowired
+    @Lazy
+    private SteamNetworkingCallbackImpl steamNetworkingCallback;
     
     @PostConstruct
     public void initialize() {
@@ -71,7 +76,7 @@ public class SteamService {
             logger.debug("🔌 初始化Steam接口...");
             steamUser = new SteamUser(new SteamUserCallbackImpl());
             steamFriends = new SteamFriends(new SteamFriendsCallbackImpl());
-            steamNetworking = new SteamNetworking(new SteamNetworkingCallbackImpl());
+            steamNetworking = new SteamNetworking(steamNetworkingCallback);
             
             // 启动回调处理线程
             startCallbackProcessor();
@@ -222,5 +227,20 @@ public class SteamService {
         if (isInitialized) {
             SteamAPI.runCallbacks();
         }
+    }
+    
+    /**
+     * 获取当前用户的Steam ID
+     */
+    public String getMySteamID() {
+        if (steamUser != null && isInitialized) {
+            try {
+                SteamID mySteamID = steamUser.getSteamID();
+                return mySteamID.toString();
+            } catch (Exception e) {
+                logger.error("💥 获取Steam ID时发生错误", e);
+            }
+        }
+        return "Unknown";
     }
 }
