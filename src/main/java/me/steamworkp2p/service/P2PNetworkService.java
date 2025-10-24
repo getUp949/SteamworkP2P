@@ -99,22 +99,29 @@ public class P2PNetworkService {
      * 连接到指定的Steam用户
      */
     public boolean connectToUser(String steamIDString) {
+        logger.info("🔍 [P2P诊断] 开始连接用户: {}", steamIDString);
+        
         if (!steamService.isInitialized()) {
-            logger.error("❌ Steam API未初始化，无法连接");
+            logger.error("❌ [P2P诊断] Steam API未初始化，无法连接");
             return false;
         }
         
         try {
             SteamID steamID = SteamID.createFromNativeHandle(Long.parseLong(steamIDString));
-            logger.info("🔗 正在连接到用户: {} ({})", steamIDString, steamID);
+            logger.info("🔗 [P2P诊断] 正在连接到用户: {} ({})", steamIDString, steamID);
+            logger.info("🔍 [P2P诊断] 当前Steam用户: {}", steamService.getCurrentUserName());
             
             // 使用Steam P2P API发送连接请求
             SteamNetworking steamNetworking = steamService.getNetworking();
             if (steamNetworking != null) {
+                logger.info("🔍 [P2P诊断] Steam Networking接口可用");
+                
                 // 发送P2P连接请求
                 ByteBuffer messageBuffer = ByteBuffer.allocateDirect("CONNECT_REQUEST".getBytes().length);
                 messageBuffer.put("CONNECT_REQUEST".getBytes());
                 messageBuffer.flip();
+                
+                logger.info("🔍 [P2P诊断] 准备发送P2P数据包到: {}, 数据大小: {}", steamIDString, messageBuffer.remaining());
                 
                 boolean result = steamNetworking.sendP2PPacket(steamID, 
                     messageBuffer, 
@@ -122,14 +129,16 @@ public class P2PNetworkService {
                     0);
                 
                 if (result) {
-                    logger.info("✅ 连接请求已发送给用户: {}", steamIDString);
+                    logger.info("✅ [P2P诊断] 连接请求已发送给用户: {}", steamIDString);
+                    logger.info("🔍 [P2P诊断] 请检查目标用户是否：1) 运行了此应用 2) 正在监听P2P连接 3) Steam在线");
                     return true;
                 } else {
-                    logger.error("❌ 发送连接请求失败");
+                    logger.error("❌ [P2P诊断] 发送连接请求失败 - Steam API返回false");
+                    logger.error("🔍 [P2P诊断] 可能原因：1) 目标用户不在线 2) 网络问题 3) Steam P2P服务问题");
                     return false;
                 }
             } else {
-                logger.error("❌ Steam Networking接口不可用");
+                logger.error("❌ [P2P诊断] Steam Networking接口不可用");
                 return false;
             }
             
