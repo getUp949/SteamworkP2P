@@ -10,7 +10,8 @@ import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
+import java.util.Set;
+import com.codedisaster.steamworks.SteamID;
 
 /**
  * Steam P2P服务适配器
@@ -100,15 +101,20 @@ public class SteamP2PService {
      * 获取当前活跃连接列表
      */
     public List<ConnectionInfo> getActiveConnections() {
-        // 从P2P服务获取连接信息并转换为ConnectionInfo列表
+        // 从SteamService获取真实的活跃连接
         List<ConnectionInfo> connections = new ArrayList<>();
         
-        // 这里应该从实际的P2P连接中获取信息
-        // 目前返回模拟数据
-        if (isListening()) {
-            // 添加一些模拟连接用于演示
-            connections.add(new ConnectionInfo("76561198000000001", "用户1", true));
-            connections.add(new ConnectionInfo("76561198000000002", "用户2", true));
+        // 获取SteamService中的活跃连接
+        Set<SteamID> activeSteamIds = steamService.getActiveConnections();
+        
+        for (SteamID steamIdObj : activeSteamIds) {
+            String steamId = steamIdObj.toString();
+            // 这里可以尝试获取用户的显示名称，如果无法获取则使用SteamID
+            String displayName = "Steam用户 " + steamId;
+            
+            // 创建连接信息对象
+            ConnectionInfo connectionInfo = new ConnectionInfo(steamId, displayName, true);
+            connections.add(connectionInfo);
         }
         
         return connections;

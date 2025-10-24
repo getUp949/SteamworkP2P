@@ -26,10 +26,13 @@ public class SteamNetworkingCallbackImpl implements SteamNetworkingCallback {
     @Override
     public void onP2PSessionConnectFail(SteamID steamIDRemote, SteamNetworking.P2PSessionError sessionError) {
         logger.warn("❌ P2P连接失败: RemoteID={}, Error={}", steamIDRemote, sessionError);
+        // 从活跃连接中移除
+        steamService.removeActiveConnection(steamIDRemote);
     }
     
     @Override
     public void onP2PSessionRequest(SteamID steamIDRemote) {
+        System.out.println("🔧 测试控制台输出 - 收到P2P连接请求: " + steamIDRemote);
         logger.info("📨 收到P2P连接请求: RemoteID={}", steamIDRemote);
         
         try {
@@ -39,6 +42,8 @@ public class SteamNetworkingCallbackImpl implements SteamNetworkingCallback {
                 boolean accepted = steamNetworking.acceptP2PSessionWithUser(steamIDRemote);
                 if (accepted) {
                     logger.info("✅ 已自动接受来自 {} 的连接请求", steamIDRemote);
+                    // 添加到活跃连接
+                    steamService.addActiveConnection(steamIDRemote);
                 } else {
                     logger.warn("❌ 接受连接请求失败: RemoteID={}", steamIDRemote);
                 }

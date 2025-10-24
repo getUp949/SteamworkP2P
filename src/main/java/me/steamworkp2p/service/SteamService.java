@@ -1,11 +1,11 @@
 package me.steamworkp2p.service;
 
 import com.codedisaster.steamworks.*;
-import me.steamworkp2p.callback.SteamUserCallbackImpl;
+
+
 import me.steamworkp2p.callback.SteamFriendsCallbackImpl;
 import me.steamworkp2p.callback.SteamNetworkingCallbackImpl;
-import me.steamworkp2p.event.SteamEvent;
-import me.steamworkp2p.event.SteamCallbackEvent;
+import me.steamworkp2p.callback.SteamUserCallbackImpl;
 import me.steamworkp2p.event.P2PPacketProcessEvent;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -19,6 +19,9 @@ import org.springframework.context.annotation.Lazy;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.Set;
+import java.util.HashSet;
+import java.util.Collections;
 
 /**
  * Steam API 服务类
@@ -39,6 +42,9 @@ public class SteamService {
     
     private boolean isInitialized = false;
     private ScheduledExecutorService callbackExecutor;
+    
+    // 跟踪活跃的P2P连接
+    private final Set<SteamID> activeConnections = Collections.synchronizedSet(new HashSet<>());
     
     @Autowired
     private ApplicationEventPublisher eventPublisher;
@@ -86,6 +92,10 @@ public class SteamService {
             logger.info("👤 当前用户: {}", getCurrentUserName());
             logger.info("🆔 Steam ID: {}", getCurrentSteamID());
             logger.info("🌐 网络状态: {}", getNetworkStatus());
+            
+            // 测试控制台输出
+            System.out.println("🔧 测试控制台输出 - Steam API已初始化");
+            logger.info("🔧 测试日志输出 - Steam API已初始化");
             
         } catch (Exception e) {
             logger.error("💥 Steam API初始化过程中发生错误", e);
@@ -242,5 +252,35 @@ public class SteamService {
             }
         }
         return "Unknown";
+    }
+    
+    /**
+     * 获取活跃的P2P连接列表
+     */
+    public Set<SteamID> getActiveConnections() {
+        return new HashSet<>(activeConnections);
+    }
+    
+    /**
+     * 添加活跃连接
+     */
+    public void addActiveConnection(SteamID steamID) {
+        activeConnections.add(steamID);
+        logger.info("🔗 添加活跃连接: {}", steamID);
+    }
+    
+    /**
+     * 移除活跃连接
+     */
+    public void removeActiveConnection(SteamID steamID) {
+        activeConnections.remove(steamID);
+        logger.info("🔌 移除活跃连接: {}", steamID);
+    }
+    
+    /**
+     * 检查是否与指定用户有活跃连接
+     */
+    public boolean hasActiveConnection(SteamID steamID) {
+        return activeConnections.contains(steamID);
     }
 }
